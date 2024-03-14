@@ -1,0 +1,48 @@
+[project]
+name = "tools"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "Salamandar", email = "felix@piedallu.me"},
+]
+dependencies = [
+    "gitpython>=3.1.42",
+    "tomlkit>=0.12.4",
+]
+requires-python = ">=3.8"
+readme = "README.md"
+license = {text = "GPLv3"}
+
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "black>=24",
+    "ruff>=0.3",
+    "mypy>=1.9",
+    "types-toml>=0.10",
+]
+
+[tool.black]
+line-length = 120
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+  "F",   # pyflakes
+  "E",   # pycodestyle
+  "W",   # pycodestyle
+  "I",   # isort
+  "N",   # pep8-naming
+  "B",   # flake8-ubgbear
+  "ANN", # flake8-annotations
+  "Q",   # flake8-quotes
+  "PTH", # flake8-use-pathlib
+  "UP",  # pyupgrade,
+]
+
+ignore = ["ANN101", "ANN102", "ANN401"]
