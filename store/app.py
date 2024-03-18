@@ -1,45 +1,39 @@
-import time
-import re
-import toml
+#!/usr/bin/env python3
+
 import base64
 import hashlib
 import hmac
-import os
-import string
 import random
-import urllib
-import json
+import re
+import string
 import sys
-from slugify import slugify
-from flask import (
-    Flask,
-    send_from_directory,
-    render_template,
-    session,
-    redirect,
-    request,
-)
-from flask_babel import Babel
+import time
+import urllib
+from pathlib import Path
+
+import toml
+from flask import Flask, redirect, render_template, request, send_from_directory, session
+from flask.typing import ResponseReturnValue
+from flask_babel import Babel  # type: ignore
 from flask_babel import gettext as _
 from github import Github, InputGitAuthor
+from slugify import slugify
 
-sys.path = [os.path.dirname(__file__)] + sys.path
-
-from utils import (
-    get_locale,
-    get_catalog,
-    get_wishlist,
-    get_stars,
-    get_app_md_and_screenshots,
-    save_wishlist_submit_for_ratelimit,
+from .utils import (
     check_wishlist_submit_ratelimit,
+    get_app_md_and_screenshots,
+    get_catalog,
+    get_locale,
+    get_stars,
+    get_wishlist,
+    save_wishlist_submit_for_ratelimit,
 )
 
 app = Flask(__name__, static_url_path="/assets", static_folder="assets")
 
 try:
-    config = toml.loads(open("config.toml").read())
-except Exception as e:
+    config = toml.loads(Path("config.toml").open().read())
+except RuntimeError:
     print(
         "You should create a config.toml with the appropriate key/values, cf config.toml.example"
     )
@@ -126,8 +120,8 @@ def popularity_json():
 @app.route("/app/<app_id>")
 def app_info(app_id):
     infos = get_catalog()["apps"].get(app_id)
-    app_folder = os.path.join(config["APPS_CACHE"], app_id)
-    if not infos or not os.path.exists(app_folder):
+    app_folder = Path(config["APPS_CACHE"]) / app_id
+    if not infos or not app_folder.exists():
         return f"App {app_id} not found", 404
 
     get_app_md_and_screenshots(app_folder, infos)
@@ -144,7 +138,7 @@ def app_info(app_id):
 
 
 @app.route("/app/<app_id>/<action>")
-def star_app(app_id, action):
+def star_app(app_id: str, action) -> ResponseReturnValue:
     assert action in ["star", "unstar"]
     if app_id not in get_catalog()["apps"] and app_id not in get_wishlist():
         return _("App %(app_id) not found", app_id=app_id), 404
@@ -153,26 +147,23 @@ def star_app(app_id, action):
             _("You must be logged in to be able to star an app")
             + "<br/><br/>"
             + _(
-                "Note that, due to various abuses, we restricted login on the app store to 'trust level 1' users.<br/><br/>'Trust level 1' is obtained after interacting a minimum with the forum, and more specifically: entering at least 5 topics, reading at least 30 posts, and spending at least 10 minutes reading posts."
+                "Note that, due to various abuses, we restricted login on the app store to 'trust level 1' users."
+                "<br/><br/>"
+                "'Trust level 1' is obtained after interacting a minimum with the forum, and more specifically: "
+                "entering at least 5 topics, reading at least 30 posts, and spending at least 10 minutes reading posts."
             ),
             401,
         )
 
-    app_star_folder = os.path.join(".stars", app_id)
-    app_star_for_this_user = os.path.join(
-        ".stars", app_id, session.get("user", {})["id"]
-    )
+    app_star_folder = Path(".stars") / app_id
+    app_star_for_this_user = app_star_folder / (session.get("user", {})["id"])
 
-    if not os.path.exists(app_star_folder):
-        os.mkdir(app_star_folder)
+    app_star_folder.mkdir(exist_ok=True)
 
     if action == "star":
-        open(app_star_for_this_user, "w").write("")
+        app_star_for_this_user.open("w").write("")
     elif action == "unstar":
-        try:
-            os.remove(app_star_for_this_user)
-        except FileNotFoundError:
-            pass
+        app_star_folder.unlink(missing_ok=True)
 
     if app_id in get_catalog()["apps"]:
         return redirect(f"/app/{app_id}")
@@ -203,7 +194,10 @@ def add_to_wishlist():
                 _("You must be logged in to submit an app to the wishlist")
                 + "<br/><br/>"
                 + _(
-                    "Note that, due to various abuses, we restricted login on the app store to 'trust level 1' users.<br/><br/>'Trust level 1' is obtained after interacting a minimum with the forum, and more specifically: entering at least 5 topics, reading at least 30 posts, and spending at least 10 minutes reading posts."
+                    "Note that, due to various abuses, we restricted login on the app store to 'trust level 1' users."
+                    "<br/><br/>'Trust level 1' is obtained after interacting a minimum with the forum, and more "
+                    "specifically: entering at least 5 topics, reading at least 30 posts, and spending at least "
+                    "10 minutes reading posts."
                 )
             )
             return render_template(
@@ -258,7 +252,8 @@ def add_to_wishlist():
                 check_wishlist_submit_ratelimit(session["user"]["username"]) is True
                 and session["user"]["bypass_ratelimit"] is False,
                 _(
-                    "Proposing wishlist additions is limited to once every 15 days per user. Please try again in a few days."
+                    "Proposing wishlist additions is limited to once every 15 days per user. "
+                    "Please try again in a few days."
                 ),
             ),
             (len(name) >= 3, _("App name should be at least 3 characters")),
@@ -298,7 +293,8 @@ def add_to_wishlist():
                     for keyword in boring_keywords_to_check_for_people_not_reading_the_instructions
                 ),
                 _(
-                    "Please focus on what the app does, without using marketing, fuzzy terms, or repeating that the app is 'free' and 'self-hostable'."
+                    "Please focus on what the app does, without using marketing, fuzzy terms, "
+                    "or repeating that the app is 'free' and 'self-hostable'."
                 ),
             ),
             (
@@ -342,7 +338,8 @@ def add_to_wishlist():
                 csrf_token=csrf_token,
                 successmsg=None,
                 errormsg=_(
-                    "An entry with the name %(slug)s already exists in the wishlist, instead, you can <a href='%(url)s'>add a star to the app to show your interest</a>.",
+                    "An entry with the name %(slug)s already exists in the wishlist, instead, "
+                    "you can <a href='%(url)s'>add a star to the app to show your interest</a>.",
                     slug=slug,
                     url=url,
                 ),
@@ -362,12 +359,13 @@ def add_to_wishlist():
             # Get the commit base for the new branch, and create it
             commit_sha = repo.get_branch(repo.default_branch).commit.sha
             repo.create_git_ref(ref=f"refs/heads/{new_branch}", sha=commit_sha)
-        except exception as e:
+        except Exception as e:
             print("… Failed to create branch ?")
             print(e)
             url = "https://github.com/YunoHost/apps/pulls?q=is%3Apr+is%3Aopen+wishlist"
             errormsg = _(
-                "Failed to create the pull request to add the app to the wishlist… Maybe there's already <a href='%(url)s'>a waiting PR for this app</a>? Else, please report the issue to the YunoHost team.",
+                "Failed to create the pull request to add the app to the wishlist… Maybe there's already "
+                "<a href='%(url)s'>a waiting PR for this app</a>? Else, please report the issue to the YunoHost team.",
                 url=url,
             )
             return render_template(
@@ -419,7 +417,8 @@ Description: {description}
         url = f"https://github.com/YunoHost/apps/pull/{pr.number}"
 
         successmsg = _(
-            "Your proposed app has succesfully been submitted. It must now be validated by the YunoHost team. You can track progress here: <a href='%(url)s'>%(url)s</a>",
+            "Your proposed app has succesfully been submitted. It must now be validated by the YunoHost team. "
+            "You can track progress here: <a href='%(url)s'>%(url)s</a>",
             url=url,
         )
 
@@ -495,7 +494,10 @@ def sso_login_callback():
             _("Unfortunately, login was denied.")
             + "<br/><br/>"
             + _(
-                "Note that, due to various abuses, we restricted login on the app store to 'trust level 1' users.<br/><br/>'Trust level 1' is obtained after interacting a minimum with the forum, and more specifically: entering at least 5 topics, reading at least 30 posts, and spending at least 10 minutes reading posts."
+                "Note that, due to various abuses, we restricted login on the app store to 'trust level 1' users."
+                "<br/><br/>'Trust level 1' is obtained after interacting a minimum with the forum, and more "
+                "specifically: entering at least 5 topics, reading at least 30 posts, and spending at least "
+                "10 minutes reading posts."
             ),
             403,
         )

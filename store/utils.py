@@ -1,15 +1,22 @@
-import time
+#!/usr/bin/env python3
+
 import base64
-import os
 import json
-import toml
+import os
 import subprocess
+import time
+from hashlib import md5
+from pathlib import Path
+
 import pycmarkgfm
+import tomlkit
 from emoji import emojize
 from flask import request
-from hashlib import md5
 
-AVAILABLE_LANGUAGES = ["en"] + os.listdir("translations")
+TRANSLATIONS_DIR = Path(__file__).parent / "translations"
+
+
+AVAILABLE_LANGUAGES = ["en"] + [str(d) for d in TRANSLATIONS_DIR.glob("*/")]
 
 
 def get_locale():
@@ -19,12 +26,13 @@ def get_locale():
 
 
 def get_catalog():
-    path = "../builds/default/v3/apps.json"
-    mtime = os.path.getmtime(path)
+    path = Path("../builds/default/v3/apps.json").resolve()
+
+    mtime = path.stat().st_mtime
     if get_catalog.mtime_catalog != mtime:
         get_catalog.mtime_catalog = mtime
 
-        catalog = json.load(open(path))
+        catalog = json.load(path.open())
         catalog["categories"] = {c["id"]: c for c in catalog["categories"]}
         catalog["antifeatures"] = {c["id"]: c for c in catalog["antifeatures"]}
 
@@ -58,11 +66,11 @@ get_catalog()
 
 
 def get_wishlist():
-    path = "../wishlist.toml"
-    mtime = os.path.getmtime(path)
+    path = Path("../wishlist.toml").resolve()
+    mtime = path.stat().st_mtime
     if get_wishlist.mtime_wishlist != mtime:
         get_wishlist.mtime_wishlist = mtime
-        get_wishlist.cache_wishlist = toml.load(open(path))
+        get_wishlist.cache_wishlist = tomlkit.load(path.open())
 
     return get_wishlist.cache_wishlist
 
@@ -96,26 +104,22 @@ get_stars()
 
 def check_wishlist_submit_ratelimit(user):
 
-    dir_ = os.path.join(".wishlist_ratelimit")
-    if not os.path.exists(dir_):
-        os.mkdir(dir_)
+    dir_ = Path(".wishlist_ratelimit").resolve()
+    dir_.mkdir(exist_ok=True)
+    f = dir_ / md5(user.encode()).hexdigest()
 
-    f = os.path.join(dir_, md5(user.encode()).hexdigest())
-
-    return not os.path.exists(f) or (time.time() - os.path.getmtime(f)) > (
+    return not f.exists() or (time.time() - f.stat().st_mtime) > (
         15 * 24 * 3600
     )  # 15 days
 
 
 def save_wishlist_submit_for_ratelimit(user):
 
-    dir_ = os.path.join(".wishlist_ratelimit")
-    if not os.path.exists(dir_):
-        os.mkdir(dir_)
+    dir_ = Path(".wishlist_ratelimit").resolve()
+    dir_.mkdir(exist_ok=True)
 
-    f = os.path.join(dir_, md5(user.encode()).hexdigest())
-
-    open(f, "w").write("")
+    f = dir_ / md5(user.encode()).hexdigest()
+    f.touch()
 
 
 def human_to_binary(size: str) -> int:
@@ -133,7 +137,7 @@ def human_to_binary(size: str) -> int:
     try:
         size_ = float(size)
     except Exception:
-        raise Exception(f"Failed to convert size {size} to float")
+        raise Exception(f"Failed to convert size {size} to float")  # noqa: B904
 
     return int(size_ * factor[suffix])
 
@@ -141,46 +145,48 @@ def human_to_binary(size: str) -> int:
 def get_app_md_and_screenshots(app_folder, infos):
     locale = get_locale()
 
-    if locale != "en" and os.path.exists(
-        os.path.join(app_folder, "doc", f"DESCRIPTION_{locale}.md")
-    ):
-        description_path = os.path.join(app_folder, "doc", f"DESCRIPTION_{locale}.md")
-    elif os.path.exists(os.path.join(app_folder, "doc", "DESCRIPTION.md")):
-        description_path = os.path.join(app_folder, "doc", "DESCRIPTION.md")
+    description_path_localized = app_folder / "doc" / f"DESCRIPTION_{locale}.md"
+    description_path_generic = app_folder / "doc" / "DESCRIPTION.md"
+
+    if locale != "en" and description_path_localized.exists():
+        description_path = description_path_localized
+    elif description_path_generic.exists():
+        description_path = description_path_generic
     else:
         description_path = None
     if description_path:
-        with open(description_path) as f:
+        with description_path.open() as f:
             infos["full_description_html"] = emojize(
                 pycmarkgfm.gfm_to_html(f.read()), language="alias"
             )
     else:
         infos["full_description_html"] = infos["manifest"]["description"][locale]
 
-    if locale != "en" and os.path.exists(
-        os.path.join(app_folder, "doc", f"PRE_INSTALL_{locale}.md")
-    ):
-        pre_install_path = os.path.join(app_folder, "doc", f"PRE_INSTALL_{locale}.md")
-    elif os.path.exists(os.path.join(app_folder, "doc", "PRE_INSTALL.md")):
-        pre_install_path = os.path.join(app_folder, "doc", "PRE_INSTALL.md")
+    preinstall_path_localized = app_folder / "doc" / f"PRE_INSTALL_{locale}.md"
+    preinstall_path_generic = app_folder / "doc" / "PRE_INSTALL.md"
+
+    if locale != "en" and preinstall_path_localized.exists():
+        pre_install_path = preinstall_path_localized
+    elif preinstall_path_generic.exists():
+        pre_install_path = preinstall_path_generic
     else:
         pre_install_path = None
     if pre_install_path:
-        with open(pre_install_path) as f:
+        with pre_install_path.open() as f:
             infos["pre_install_html"] = emojize(
                 pycmarkgfm.gfm_to_html(f.read()), language="alias"
             )
 
     infos["screenshot"] = None
 
-    screenshots_folder = os.path.join(app_folder, "doc", "screenshots")
+    screenshots_folder = app_folder / "doc" / "screenshots"
 
-    if os.path.exists(screenshots_folder):
-        with os.scandir(screenshots_folder) as it:
+    if screenshots_folder.exists():
+        with screenshots_folder.iterdir() as it:
             for entry in it:
-                ext = os.path.splitext(entry.name)[1].replace(".", "").lower()
+                ext = entry.suffix.lower()
                 if entry.is_file() and ext in ("png", "jpg", "jpeg", "webp", "gif"):
-                    with open(entry.path, "rb") as img_file:
+                    with entry.open("rb") as img_file:
                         data = base64.b64encode(img_file.read()).decode("utf-8")
                         infos["screenshot"] = (
                             f"data:image/{ext};charset=utf-8;base64,{data}"
